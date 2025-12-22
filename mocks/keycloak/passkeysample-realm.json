@@ -1,0 +1,44 @@
+{
+  "realm": "passkeysample",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "passkeysample-api",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "api-client-secret-change-in-production",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@passkeysample.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "user1",
+      "enabled": true,
+      "email": "user1@passkeysample.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

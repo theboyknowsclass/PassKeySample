@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: PassKeySample.Api/Dockerfile
+    container_name: passkeysample-api
+    ports:
+      - "5000:80"
+      - "5001:443"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=https://+:443;http://+:80
+      - ASPNETCORE_HTTPS_PORT=5001
+      - ASPNETCORE_Kestrel__Certificates__Default__Password=PassKeySample123!
+      - ASPNETCORE_Kestrel__Certificates__Default__Path=/https/api.pfx
+      - IDP_CERTIFICATE_PATH=/certs/keycloak.crt
+    volumes:
+      - ./certs/api:/https:ro
+      # Mount IDP certificate for programmatic trust configuration
+      # In dev: keycloak.crt, in production: customer-provided certificate (could be their root CA or self-signed cert)
+      - ./certs/keycloak/keycloak.crt:/certs/keycloak.crt:ro
+    restart: unless-stopped
+    networks:
+      - passkeysample-network
+    depends_on:
+      - keycloak
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.0
+    container_name: passkeysample-keycloak
+    command: 
+      - start-dev
+      - --import-realm
+      - --hostname-strict=false
+      - --http-enabled=true
+      - --https-port=8443
+      - --https-certificate-file=/etc/x509/https/tls.crt
+      - --https-certificate-key-file=/etc/x509/https/tls.key
+    ports:
+      - "8080:8080"   # HTTP
+      - "8443:8443"   # HTTPS
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin123
+      - KC_DB=dev-file
+      - KC_HTTP_RELATIVE_PATH=/
+    volumes:
+      - ./mocks/keycloak:/opt/keycloak/data/import:ro
+      - ./certs/keycloak/keycloak.crt:/etc/x509/https/tls.crt:ro
+      - ./certs/keycloak/keycloak.key:/etc/x509/https/tls.key:ro
+    restart: unless-stopped
+    networks:
+      - passkeysample-network
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c ': < /dev/tcp/localhost/8080' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+networks:
+  passkeysample-network:
+    driver: bridge
+
