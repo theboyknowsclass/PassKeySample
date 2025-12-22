@@ -29,7 +29,10 @@ public static class HttpClientExtensions
         try
         {
             // Read the certificate (could be self-signed or a root CA)
-            var cert = X509Certificate2.CreateFromPemFile(idpCertPath);
+            // CreateFromPemFile expects both cert and key, but we only have a certificate
+            // Use CreateFromPem with just the certificate content
+            var certPem = File.ReadAllText(idpCertPath);
+            var cert = X509Certificate2.CreateFromPem(certPem);
             
             // Add the certificate to the certificate store so HttpClient will trust it
             // Use LocalMachine for Linux containers, CurrentUser for Windows

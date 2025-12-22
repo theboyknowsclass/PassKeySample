@@ -7,16 +7,16 @@ public class DPoPValidationMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<DPoPValidationMiddleware> _logger;
-    private readonly IDPoPValidator _dpopValidator;
+    private readonly IServiceProvider _serviceProvider;
 
     public DPoPValidationMiddleware(
         RequestDelegate next,
         ILogger<DPoPValidationMiddleware> logger,
-        IDPoPValidator dpopValidator)
+        IServiceProvider serviceProvider)
     {
         _next = next;
         _logger = logger;
-        _dpopValidator = dpopValidator;
+        _serviceProvider = serviceProvider;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -73,8 +73,9 @@ public class DPoPValidationMiddleware
         var httpMethod = context.Request.Method;
         var httpUrl = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.Path}{context.Request.QueryString}";
 
-        // Validate DPoP proof
-        var validationResult = await _dpopValidator.ValidateDPoPProofAsync(
+        // Validate DPoP proof - resolve validator from request scope
+        var dpopValidator = context.RequestServices.GetRequiredService<IDPoPValidator>();
+        var validationResult = await dpopValidator.ValidateDPoPProofAsync(
             dpopProof,
             accessToken,
             httpMethod,

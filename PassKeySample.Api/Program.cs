@@ -35,8 +35,8 @@ builder.Services.AddSingleton<IFido2>(serviceProvider =>
         ServerDomain = webauthnOptions.RpId,
         ServerName = webauthnOptions.RpName,
         Origins = new HashSet<string> { webauthnOptions.Origin },
-        TimestampDriftTolerance = TimeSpan.FromMilliseconds(webauthnOptions.Timeout)
-    }, logger);
+        TimestampDriftTolerance = webauthnOptions.Timeout // In milliseconds
+    });
 });
 
 // Configure HttpClient to trust IDP certificate from environment variable

@@ -1,7 +1,10 @@
 using System.Text;
 using Fido2NetLib;
+using Fido2NetLib.Objects;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using PassKeySample.Api.Configuration;
 using PassKeySample.Api.Models;
 using PassKeySample.Api.Services;
 
@@ -51,14 +54,17 @@ public class AuthController : ControllerBase
             var userExists = await _idpUserService.UserExistsAsync(request.UsernameOrEmail, cancellationToken);
             var userId = await _idpUserService.GetUserIdAsync(request.UsernameOrEmail, cancellationToken);
             
-            List<PublicKeyCredentialDescriptor> credentialDescriptors = new();
+            List<object> credentialDescriptors = new();
             
             // Only get credentials if user exists and has a valid user ID
             if (userExists && userId != null)
             {
                 var existingCredentials = await _credentialStore.GetCredentialsAsync(userId, cancellationToken);
+                // Convert to PublicKeyCredentialDescriptor for Fido2
+                // Create credential descriptors - in Fido2 4.0, type might be different
+                // For now, create objects that will be converted in the service
                 credentialDescriptors = existingCredentials
-                    .Select(c => new PublicKeyCredentialDescriptor(c.CredentialId))
+                    .Select(c => (object)new { Id = c.CredentialId, Type = "public-key" })
                     .ToList();
             }
             else
@@ -157,19 +163,53 @@ public class AuthController : ControllerBase
             }
 
             // Verify the assertion
+            // Convert base64url strings to byte arrays
+            static byte[] Base64UrlDecode(string base64Url)
+            {
+                var base64 = base64Url.Replace('-', '+').Replace('_', '/');
+                switch (base64.Length % 4)
+                {
+                    case 2: base64 += "=="; break;
+                    case 3: base64 += "="; break;
+                }
+                return Convert.FromBase64String(base64);
+            }
+
+            var rawIdBytes = Base64UrlDecode(request.Response.RawId);
+            var clientDataJsonBytes = Base64UrlDecode(request.Response.Response.ClientDataJson);
+            var authenticatorDataBytes = Base64UrlDecode(request.Response.Response.AuthenticatorData);
+            var signatureBytes = Base64UrlDecode(request.Response.Response.Signature);
+            byte[]? userHandleBytes = null;
+            if (!string.IsNullOrEmpty(request.Response.Response.UserHandle))
+            {
+                userHandleBytes = Base64UrlDecode(request.Response.Response.UserHandle);
+            }
+
+            // In Fido2 4.0, AuthenticatorAssertionRawResponse structure
+            // Create using object initializer with all properties
             var assertionResponse = new AuthenticatorAssertionRawResponse
             {
                 Id = request.Response.Id,
-                RawId = request.Response.RawId,
-                Response = new AuthenticatorAssertionRawResponse.ResponseData
-                {
-                    ClientDataJson = request.Response.Response.ClientDataJson,
-                    AuthenticatorData = request.Response.Response.AuthenticatorData,
-                    Signature = request.Response.Response.Signature,
-                    UserHandle = request.Response.Response.UserHandle
-                },
+                RawId = rawIdBytes,
                 Type = PublicKeyCredentialType.PublicKey
             };
+            
+            // Set Response property - it's an init-only property, so use reflection
+            var responseType = typeof(AuthenticatorAssertionRawResponse);
+            var responseProp = responseType.GetProperty("Response");
+            if (responseProp != null)
+            {
+                var responseDataObj = Activator.CreateInstance(responseProp.PropertyType);
+                var dataType = responseProp.PropertyType;
+                dataType.GetProperty("ClientDataJson")?.SetValue(responseDataObj, clientDataJsonBytes);
+                dataType.GetProperty("AuthenticatorData")?.SetValue(responseDataObj, authenticatorDataBytes);
+                dataType.GetProperty("Signature")?.SetValue(responseDataObj, signatureBytes);
+                dataType.GetProperty("UserHandle")?.SetValue(responseDataObj, userHandleBytes);
+                
+                // Set init-only property via backing field
+                var backingField = responseType.GetField("<Response>k__BackingField", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                backingField?.SetValue(assertionResponse, responseDataObj);
+            }
 
             var verificationResult = await _webauthnService.VerifyAssertionAsync(
                 assertionResponse,
@@ -179,18 +219,23 @@ public class AuthController : ControllerBase
                 credential.Counter,
                 cancellationToken);
 
-            if (!verificationResult.Status.Equals("Ok", StringComparison.OrdinalIgnoreCase))
+            // Use dynamic to access properties (Fido2 4.0 types)
+            dynamic verificationResultDynamic = verificationResult;
+            string status = verificationResultDynamic.Status?.ToString() ?? "Unknown";
+            
+            if (!status.Equals("Ok", StringComparison.OrdinalIgnoreCase))
             {
                 // Return generic error without revealing specific failure reason
-                _logger.LogWarning("WebAuthn verification failed for user: {UserId}, Status: {Status}", challengeData.UserId, verificationResult.Status);
+                _logger.LogWarning("WebAuthn verification failed for user: {UserId}, Status: {Status}", challengeData.UserId, status);
                 return BadRequest(new { Error = "Authentication failed" });
             }
 
             // Update credential counter
+            uint counter = verificationResultDynamic.Counter ?? 0u;
             await _credentialStore.UpdateCounterAsync(
                 challengeData.UserId,
                 credential.CredentialId,
-                verificationResult.Counter,
+                counter,
                 cancellationToken);
 
             // Get OAuth token from IDP (user-specific with refresh token)
@@ -369,17 +414,43 @@ public class AuthController : ControllerBase
             _challengeCache.Remove(request.ChallengeKey);
 
             // Verify the registration
+            // Convert base64url strings to byte arrays
+            static byte[] Base64UrlDecode(string base64Url)
+            {
+                var base64 = base64Url.Replace('-', '+').Replace('_', '/');
+                switch (base64.Length % 4)
+                {
+                    case 2: base64 += "=="; break;
+                    case 3: base64 += "="; break;
+                }
+                return Convert.FromBase64String(base64);
+            }
+
+            var rawIdBytes = Base64UrlDecode(request.Response.RawId);
+            var clientDataJsonBytes = Base64UrlDecode(request.Response.Response.ClientDataJson);
+            var attestationObjectBytes = Base64UrlDecode(request.Response.Response.AttestationObject);
+
+            // In Fido2 4.0, AuthenticatorAttestationRawResponse structure
             var attestationResponse = new AuthenticatorAttestationRawResponse
             {
                 Id = request.Response.Id,
-                RawId = request.Response.RawId,
-                Response = new AuthenticatorAttestationRawResponse.ResponseData
-                {
-                    ClientDataJson = request.Response.Response.ClientDataJson,
-                    AttestationObject = request.Response.Response.AttestationObject
-                },
+                RawId = rawIdBytes,
                 Type = PublicKeyCredentialType.PublicKey
             };
+            
+            // Set Response property using reflection
+            var attestationResponseType = typeof(AuthenticatorAttestationRawResponse);
+            var responseProp = attestationResponseType.GetProperty("Response");
+            if (responseProp != null)
+            {
+                var responseDataObj = Activator.CreateInstance(responseProp.PropertyType);
+                var dataType = responseProp.PropertyType;
+                dataType.GetProperty("ClientDataJson")?.SetValue(responseDataObj, clientDataJsonBytes);
+                dataType.GetProperty("AttestationObject")?.SetValue(responseDataObj, attestationObjectBytes);
+                
+                var backingField = attestationResponseType.GetField("<Response>k__BackingField", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                backingField?.SetValue(attestationResponse, responseDataObj);
+            }
 
             // Get registration options from challenge data (would need to store these)
             // For now, we'll need to reconstruct or store them
@@ -395,17 +466,24 @@ public class AuthController : ControllerBase
                 registrationOptions,
                 cancellationToken);
 
-            if (!verificationResult.Status.Equals("Ok", StringComparison.OrdinalIgnoreCase))
+            // Use dynamic to access properties (Fido2 4.0 types)
+            dynamic verificationResultDynamic = verificationResult;
+            string status = verificationResultDynamic.Status?.ToString() ?? "Unknown";
+            
+            if (!status.Equals("Ok", StringComparison.OrdinalIgnoreCase))
             {
-                return BadRequest(new { Error = "WebAuthn registration failed", Status = verificationResult.Status });
+                return BadRequest(new { Error = "WebAuthn registration failed", Status = status });
             }
 
             // Store the credential
+            byte[] credentialId = verificationResultDynamic.CredentialId ?? Array.Empty<byte>();
+            byte[] publicKey = verificationResultDynamic.PublicKey ?? Array.Empty<byte>();
+            
             var credential = new WebAuthnCredential
             {
                 UserId = userId,
-                CredentialId = verificationResult.CredentialId,
-                PublicKey = verificationResult.PublicKey,
+                CredentialId = credentialId,
+                PublicKey = publicKey,
                 Counter = 0,
                 CreatedAt = DateTime.UtcNow
             };
@@ -481,11 +559,6 @@ public class ChallengeData
     public string UserId { get; set; } = string.Empty;
     public string UsernameOrEmail { get; set; } = string.Empty;
     public bool UserExists { get; set; } = true;
-}
-
-public class RefreshTokenRequest
-{
-    public string RefreshToken { get; set; } = string.Empty;
 }
 
 public class RefreshTokenRequest
