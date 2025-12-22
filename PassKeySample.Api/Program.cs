@@ -26,6 +26,12 @@ builder.Services.Configure<WebAuthnOptions>(
 var webauthnOptions = builder.Configuration.GetSection(WebAuthnOptions.SectionName)
     .Get<WebAuthnOptions>() ?? new WebAuthnOptions();
 
+// Configure CORS options
+builder.Services.Configure<CorsOptions>(
+    builder.Configuration.GetSection(CorsOptions.SectionName));
+var corsOptions = builder.Configuration.GetSection(CorsOptions.SectionName)
+    .Get<CorsOptions>() ?? new CorsOptions();
+
 // Configure Fido2NetLib
 builder.Services.AddSingleton<IFido2>(serviceProvider =>
 {
@@ -55,6 +61,38 @@ builder.Services.AddScoped<IIdpUserService, OidcIdpUserService>();
 builder.Services.AddScoped<IWebAuthnService, WebAuthnService>();
 builder.Services.AddScoped<IDPoPValidator, DPoPValidator>();
 
+// Configure CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        if (corsOptions.AllowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(corsOptions.AllowedOrigins);
+            
+            if (corsOptions.AllowCredentials)
+            {
+                policy.AllowCredentials();
+            }
+        }
+        else
+        {
+            // AllowAnyOrigin cannot be used with AllowCredentials
+            policy.AllowAnyOrigin();
+        }
+
+        if (corsOptions.AllowAnyMethod)
+        {
+            policy.AllowAnyMethod();
+        }
+
+        if (corsOptions.AllowAnyHeader)
+        {
+            policy.AllowAnyHeader();
+        }
+    });
+});
+
 // Configure HTTPS
 builder.Services.AddHttpsRedirection(options =>
 {
@@ -72,6 +110,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Enable CORS (before other middleware)
+app.UseCors("AllowFrontend");
 
 // Add DPoP validation middleware (before authorization)
 app.UseMiddleware<PassKeySample.Api.Middleware.DPoPValidationMiddleware>();
