@@ -1,16 +1,16 @@
-import { SignJWT, importJWK, generateKeyPair } from 'jose'
+import { SignJWT, generateKeyPair, type KeyLike, type JWK } from 'jose'
 
 interface DPoPKeyPair {
-  privateKey: CryptoKey
-  publicKey: CryptoKey
-  publicKeyJwk: JsonWebKey
+  privateKey: KeyLike
+  publicKey: KeyLike
+  publicKeyJwk: JWK
 }
 
 // Store DPoP key pair in closure to minimize exposure
 let dpopKeyPair: DPoPKeyPair | null = null
 
 /**
- * Generates a DPoP key pair using Web Crypto API
+ * Generates a DPoP key pair using jose library
  */
 async function generateDPoPKeyPair(): Promise<DPoPKeyPair> {
   const { publicKey, privateKey } = await generateKeyPair('ES256', {
@@ -18,12 +18,12 @@ async function generateDPoPKeyPair(): Promise<DPoPKeyPair> {
   })
 
   // Export public key as JWK for inclusion in DPoP proof
-  const publicKeyJwk = await crypto.subtle.exportKey('jwk', publicKey)
+  const publicKeyJwk = await crypto.subtle.exportKey('jwk', publicKey as CryptoKey) as JWK
 
   return {
     privateKey,
     publicKey,
-    publicKeyJwk: publicKeyJwk as JsonWebKey,
+    publicKeyJwk,
   }
 }
 
@@ -112,15 +112,16 @@ export async function generateDPoPProof(
     claims.ath = ath
   }
 
-  // Import private key for signing
-  const privateKey = await importJWK(
-    await crypto.subtle.exportKey('jwk', keyPair.privateKey),
-    'ES256'
-  )
+  // Import private key for signing (keyPair.privateKey is already a KeyLike from jose)
+  const privateKey = keyPair.privateKey
 
   // Create and sign JWT
   const jwt = await new SignJWT(claims)
-    .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: keyPair.publicKeyJwk })
+    .setProtectedHeader({ 
+      alg: 'ES256', 
+      typ: 'dpop+jwt', 
+      jwk: keyPair.publicKeyJwk as Pick<JWK, 'kty' | 'crv' | 'x' | 'y' | 'e' | 'n'>
+    })
     .sign(privateKey)
 
   return jwt

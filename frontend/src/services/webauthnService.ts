@@ -61,7 +61,9 @@ function convertAllowCredentials(
 
   return allowCredentials.map((cred) => ({
     ...cred,
-    id: base64UrlToArrayBuffer(cred.id as string),
+    id: typeof cred.id === 'string' 
+      ? base64UrlToArrayBuffer(cred.id) 
+      : cred.id,
   }))
 }
 
@@ -133,7 +135,11 @@ export async function authenticateWithWebAuthn(
 
   // Step 2: Perform WebAuthn authentication (this returns both credential and response)
   const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions = {
-    challenge: convertChallenge(options.challenge as string),
+    challenge: convertChallenge(
+      typeof options.challenge === 'string' 
+        ? options.challenge 
+        : (options.challenge as unknown as string)
+    ),
     allowCredentials: convertAllowCredentials(options.allowCredentials),
     userVerification: options.userVerification,
     timeout: options.timeout,
