@@ -1,4 +1,5 @@
 import { useForm } from 'react-hook-form'
+import { useAuth } from '../hooks/useAuth'
 import './LoginPage.css'
 
 interface LoginFormData {
@@ -6,21 +7,31 @@ interface LoginFormData {
 }
 
 function LoginPage() {
+  const { login, isLoading, error } = useAuth()
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
+    setError,
   } = useForm<LoginFormData>({
     mode: 'onBlur',
   })
 
   const onSubmit = async (data: LoginFormData) => {
-    // TODO: Implement API call
-    console.log('Login attempt:', data)
-    
-    // Dummy section for now
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    alert(`Dummy login: ${data.usernameOrEmail}`)
+    try {
+      await login(data.usernameOrEmail)
+      // Login successful - tokens are stored, user is authenticated
+      // You can redirect or show success message here
+      console.log('Login successful')
+    } catch (err) {
+      // Error is handled by useAuth hook, but we can also set form error
+      const errorMessage =
+        err instanceof Error ? err.message : 'Authentication failed'
+      setError('usernameOrEmail', {
+        type: 'manual',
+        message: errorMessage,
+      })
+    }
   }
 
   return (
@@ -52,12 +63,18 @@ function LoginPage() {
             )}
           </div>
 
+          {error && (
+            <div className="form-error" style={{ marginBottom: '1rem' }}>
+              {error}
+            </div>
+          )}
+
           <button
             type="submit"
             className="login-button"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isLoading}
           >
-            {isSubmitting ? 'Signing in...' : 'Sign In'}
+            {isSubmitting || isLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
       </div>
