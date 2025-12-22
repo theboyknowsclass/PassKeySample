@@ -60,7 +60,25 @@ services:
       retries: 5
       start_period: 60s
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: passkeysample-frontend
+    ports:
+      - "3000:443"   # HTTPS
+    environment:
+      - VITE_API_BASE_URL=https://localhost:5001
+    volumes:
+      - ./certs/frontend/frontend.crt:/etc/nginx/ssl/frontend.crt:ro
+      - ./certs/frontend/frontend.key:/etc/nginx/ssl/frontend.key:ro
+    restart: unless-stopped
+    networks:
+      - frontend-network
+
 networks:
   passkeysample-network:
+    driver: bridge
+  frontend-network:
     driver: bridge
 
