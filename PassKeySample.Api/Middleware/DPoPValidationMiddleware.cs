@@ -25,8 +25,7 @@ public class DPoPValidationMiddleware
         var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
         if (path.StartsWith("/api/auth/") || 
             path.StartsWith("/swagger") || 
-            path == "/" ||
-            path.StartsWith("/api/version"))
+            path == "/")
         {
             await _next(context);
             return;
@@ -69,11 +68,28 @@ public class DPoPValidationMiddleware
 
         var accessToken = authHeaderValue.Substring(7).Trim();
 
-        // Get HTTP method and URL
+        // Step 1: Validate JWT token first (signature, expiration, issuer, audience)
+        var jwtValidator = context.RequestServices.GetRequiredService<IJwtTokenValidator>();
+        var jwtValidationResult = await jwtValidator.ValidateTokenAsync(accessToken, context.RequestAborted);
+
+        if (!jwtValidationResult.IsValid)
+        {
+            _logger.LogWarning("JWT token validation failed: {Error}", jwtValidationResult.ErrorMessage);
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(
+                System.Text.Json.JsonSerializer.Serialize(new { Error = "Invalid token", Details = jwtValidationResult.ErrorMessage }),
+                Encoding.UTF8);
+            return;
+        }
+
+        // Store JWT validation result in context for use by controllers
+        context.Items["JwtValidationResult"] = jwtValidationResult;
+
+        // Step 2: Validate DPoP proof (bound to the validated token)
         var httpMethod = context.Request.Method;
         var httpUrl = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.Path}{context.Request.QueryString}";
 
-        // Validate DPoP proof - resolve validator from request scope
         var dpopValidator = context.RequestServices.GetRequiredService<IDPoPValidator>();
         var validationResult = await dpopValidator.ValidateDPoPProofAsync(
             dpopProof,

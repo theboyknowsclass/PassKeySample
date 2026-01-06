@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 namespace PassKeySample.Api.Extensions;
@@ -29,10 +30,8 @@ public static class HttpClientExtensions
         try
         {
             // Read the certificate (could be self-signed or a root CA)
-            // CreateFromPemFile expects both cert and key, but we only have a certificate
-            // Use CreateFromPem with just the certificate content
-            var certPem = File.ReadAllText(idpCertPath);
-            var cert = X509Certificate2.CreateFromPem(certPem);
+            // For .crt files, use the constructor directly
+            var cert = new X509Certificate2(idpCertPath);
             
             // Add the certificate to the certificate store so HttpClient will trust it
             // Use LocalMachine for Linux containers, CurrentUser for Windows
@@ -68,7 +67,23 @@ public static class HttpClientExtensions
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to configure IDP certificate trust from: {IdpCertPath}", idpCertPath);
+            // In Docker/Linux environments, the system certificate store is read-only
+            // This is expected behavior. Certificate validation will be handled via
+            // ServerCertificateCustomValidationCallback in HttpClient configuration.
+            if (ex is CryptographicException && 
+                (ex.InnerException is PlatformNotSupportedException || 
+                 ex.Message.Contains("read-only", StringComparison.OrdinalIgnoreCase)))
+            {
+                logger.LogInformation(
+                    "Cannot add certificate to system store (read-only in Docker/Linux environment). " +
+                    "Certificate validation will be handled via HttpClient callback. Certificate path: {IdpCertPath}", 
+                    idpCertPath);
+            }
+            else
+            {
+                logger.LogWarning(ex, "Failed to configure IDP certificate trust from: {IdpCertPath}. " +
+                                     "Certificate validation will be handled via HttpClient callback.", idpCertPath);
+            }
             // Don't throw - allow the application to continue without custom certificate trust
         }
     }

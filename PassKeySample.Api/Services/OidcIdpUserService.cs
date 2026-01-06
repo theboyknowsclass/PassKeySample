@@ -20,7 +20,7 @@ public class OidcIdpUserService : IIdpUserService
         ILogger<OidcIdpUserService> logger)
     {
         _options = options;
-        _httpClient = httpClientFactory.CreateClient();
+        _httpClient = httpClientFactory.CreateClient("IdpClient");
         _cache = cache;
         _logger = logger;
     }
@@ -57,17 +57,39 @@ public class OidcIdpUserService : IIdpUserService
                 "In production, configure service account or use IDP-specific admin API.",
                 usernameOrEmail);
 
+            // Normalize to email format as the canonical user identifier
+            // This ensures consistency: both username and email resolve to the same email-based userId
+            // In production, this should query the IDP to get the actual user ID (sub claim)
+            
+            string normalizedUserId;
+            if (usernameOrEmail.Contains('@'))
+            {
+                // It's already an email - use it (normalized to lowercase)
+                normalizedUserId = usernameOrEmail.ToLowerInvariant().Trim();
+            }
+            else
+            {
+                // It's a username - convert to email format by appending default domain
+                // For Keycloak, we'll use the realm domain pattern
+                // In production, this should query the IDP to get the user's actual email
+                var username = usernameOrEmail.ToLowerInvariant().Trim();
+                // Use a default domain - in production, this should come from IDP configuration
+                normalizedUserId = $"{username}@passkeysample.local";
+                _logger.LogInformation("Converted username '{Username}' to email format: '{Email}'", usernameOrEmail, normalizedUserId);
+            }
+            
             // Cache the result (assume exists for now) with short expiration
             var cacheOptions = new MemoryCacheEntryOptions
             {
                 AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5),
                 SlidingExpiration = TimeSpan.FromMinutes(2)
             };
-            _cache.Set(cacheKey, usernameOrEmail, cacheOptions);
+            _cache.Set(cacheKey, normalizedUserId, cacheOptions);
 
-            // Return the username/email as the user identifier
-            // In a real implementation, this would be the user's sub claim from IDP
-            return usernameOrEmail;
+            // Return normalized user identifier (email format)
+            // In a real implementation, this would query the IDP to get the actual user ID (sub claim)
+            // which would be the same regardless of whether username or email is provided
+            return normalizedUserId;
         }
         catch (Exception ex)
         {

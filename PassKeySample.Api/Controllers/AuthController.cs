@@ -17,8 +17,7 @@ public class AuthController : ControllerBase
     private readonly IWebAuthnService _webauthnService;
     private readonly IWebAuthnCredentialStore _credentialStore;
     private readonly IIdpUserService _idpUserService;
-    private readonly IdentityProviderOptions _idpOptions;
-    private readonly HttpClient _httpClient;
+    private readonly ITokenExchangeService _tokenExchangeService;
     private readonly ILogger<AuthController> _logger;
     private readonly IMemoryCache _challengeCache;
 
@@ -26,16 +25,14 @@ public class AuthController : ControllerBase
         IWebAuthnService webauthnService,
         IWebAuthnCredentialStore credentialStore,
         IIdpUserService idpUserService,
-        IdentityProviderOptions idpOptions,
-        IHttpClientFactory httpClientFactory,
+        ITokenExchangeService tokenExchangeService,
         ILogger<AuthController> logger,
         IMemoryCache challengeCache)
     {
         _webauthnService = webauthnService;
         _credentialStore = credentialStore;
         _idpUserService = idpUserService;
-        _idpOptions = idpOptions;
-        _httpClient = httpClientFactory.CreateClient();
+        _tokenExchangeService = tokenExchangeService;
         _logger = logger;
         _challengeCache = challengeCache;
     }
@@ -136,32 +133,6 @@ public class AuthController : ControllerBase
                 return BadRequest(new { Error = "Authentication failed" });
             }
 
-            // Get user's credentials
-            var credentials = await _credentialStore.GetCredentialsAsync(challengeData.UserId, cancellationToken);
-            if (credentials.Count == 0)
-            {
-                // No credentials - return generic error
-                _logger.LogWarning("No credentials found for user: {UserId}", challengeData.UserId);
-                return BadRequest(new { Error = "Authentication failed" });
-            }
-
-            // Find the credential being used
-            var credentialId = Convert.FromBase64String(request.Response.Id);
-            var credential = credentials.FirstOrDefault(c => c.CredentialId.SequenceEqual(credentialId));
-            if (credential == null)
-            {
-                // Credential not found - return generic error
-                _logger.LogWarning("Credential not found for user: {UserId}", challengeData.UserId);
-                return BadRequest(new { Error = "Authentication failed" });
-            }
-
-            // Use stored assertion options
-            var assertionOptions = challengeData.AssertionOptions;
-            if (assertionOptions == null)
-            {
-                return BadRequest(new { Error = "Invalid challenge data" });
-            }
-
             // Verify the assertion
             // Convert base64url strings to byte arrays
             static byte[] Base64UrlDecode(string base64Url)
@@ -173,6 +144,61 @@ public class AuthController : ControllerBase
                     case 3: base64 += "="; break;
                 }
                 return Convert.FromBase64String(base64);
+            }
+
+            // Find the credential being used
+            // The credential ID from frontend is base64url encoded, not regular base64
+            var credentialId = Base64UrlDecode(request.Response.Id);
+            
+            // Get public key from client request (client stores it locally after registration)
+            if (string.IsNullOrWhiteSpace(request.PublicKey))
+            {
+                _logger.LogWarning("Public key not provided in login request for user: {UserId}", challengeData.UserId);
+                return BadRequest(new { Error = "Authentication failed" });
+            }
+            
+            byte[] publicKey;
+            try
+            {
+                publicKey = Convert.FromBase64String(request.PublicKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Invalid public key format in login request for user: {UserId}", challengeData.UserId);
+                return BadRequest(new { Error = "Authentication failed" });
+            }
+            
+            // Check if credential already exists in main store (for session persistence)
+            var credentials = await _credentialStore.GetCredentialsAsync(challengeData.UserId, cancellationToken);
+            var credential = credentials.FirstOrDefault(c => c.CredentialId.SequenceEqual(credentialId));
+            
+            if (credential == null)
+            {
+                // First time using this credential - store it in memory for the session
+                credential = new WebAuthnCredential
+                {
+                    UserId = challengeData.UserId,
+                    CredentialId = credentialId,
+                    PublicKey = publicKey,
+                    Counter = 0,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _credentialStore.StoreCredentialAsync(credential, cancellationToken);
+                _logger.LogInformation("Stored credential in memory for session for user: {UserId}", challengeData.UserId);
+            }
+            else
+            {
+                // Update public key if it changed (shouldn't happen, but just in case)
+                credential.PublicKey = publicKey;
+                await _credentialStore.StoreCredentialAsync(credential, cancellationToken);
+                _logger.LogInformation("Using existing credential from memory store for user: {UserId}", challengeData.UserId);
+            }
+
+            // Use stored assertion options
+            var assertionOptions = challengeData.AssertionOptions;
+            if (assertionOptions == null)
+            {
+                return BadRequest(new { Error = "Invalid challenge data" });
             }
 
             var rawIdBytes = Base64UrlDecode(request.Response.RawId);
@@ -211,6 +237,8 @@ public class AuthController : ControllerBase
                 backingField?.SetValue(assertionResponse, responseDataObj);
             }
 
+            // In Fido2 4.0, if MakeAssertionAsync succeeds, it returns a result object
+            // If it fails, it throws an exception, so no need to check Status
             var verificationResult = await _webauthnService.VerifyAssertionAsync(
                 assertionResponse,
                 assertionOptions,
@@ -219,29 +247,39 @@ public class AuthController : ControllerBase
                 credential.Counter,
                 cancellationToken);
 
-            // Use dynamic to access properties (Fido2 4.0 types)
-            dynamic verificationResultDynamic = verificationResult;
-            string status = verificationResultDynamic.Status?.ToString() ?? "Unknown";
+            // Access Counter property using reflection (Fido2 4.0 VerifyAssertionResult type)
+            var resultType = verificationResult.GetType();
+            var counterProperty = resultType.GetProperty("Counter") 
+                ?? resultType.GetProperty("SignatureCounter")
+                ?? resultType.GetProperty("CounterValue");
             
-            if (!status.Equals("Ok", StringComparison.OrdinalIgnoreCase))
+            uint counter = 0u;
+            if (counterProperty != null)
             {
-                // Return generic error without revealing specific failure reason
-                _logger.LogWarning("WebAuthn verification failed for user: {UserId}, Status: {Status}", challengeData.UserId, status);
-                return BadRequest(new { Error = "Authentication failed" });
+                var counterValue = counterProperty.GetValue(verificationResult);
+                if (counterValue != null)
+                {
+                    counter = Convert.ToUInt32(counterValue);
+                }
             }
-
-            // Update credential counter
-            uint counter = verificationResultDynamic.Counter ?? 0u;
+            else
+            {
+                _logger.LogWarning("Could not find Counter property on verification result type: {Type}", resultType.FullName);
+                // Log available properties for debugging
+                var properties = resultType.GetProperties().Select(p => p.Name).ToList();
+                _logger.LogInformation("Available properties: {Properties}", string.Join(", ", properties));
+            }
             await _credentialStore.UpdateCounterAsync(
                 challengeData.UserId,
                 credential.CredentialId,
                 counter,
                 cancellationToken);
 
-            // Get OAuth token from IDP (user-specific with refresh token)
-            var tokenResponse = await GetOAuthTokenAsync(challengeData.UsernameOrEmail, challengeData.UserId, cancellationToken);
+            // Get OAuth token from IDP using Token Exchange (RFC 8693)
+            var tokenResponse = await _tokenExchangeService.ExchangeForUserTokenAsync(challengeData.UsernameOrEmail, challengeData.UserId, cancellationToken);
             if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
             {
+                _logger.LogError("Failed to obtain OAuth token from IDP via Token Exchange for user: {UserId}", challengeData.UserId);
                 return StatusCode(500, new { Error = "Failed to obtain OAuth token from IDP" });
             }
 
@@ -262,68 +300,6 @@ public class AuthController : ControllerBase
         }
     }
 
-    private async Task<OAuthTokenResponse?> GetOAuthTokenAsync(string usernameOrEmail, string userId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            // Get token endpoint from discovery or construct it
-            var discovery = await HttpContext.RequestServices.GetRequiredService<OidcDiscoveryService>().GetDiscoveryDocumentAsync(cancellationToken);
-            var tokenEndpoint = discovery?.TokenEndpoint ?? $"{_idpOptions.GetBaseUrl()}/realms/passkeysample/protocol/openid-connect/token";
-            
-            // Use Resource Owner Password Credentials grant to get user-specific tokens
-            // Note: Since we've verified the user via WebAuthn, we can request tokens for that user
-            // In production, you might use a custom grant type or token exchange
-            // For Keycloak, we'll use the direct access grant with the username
-            var requestData = new Dictionary<string, string>
-            {
-                { "grant_type", "password" }, // Resource Owner Password Credentials
-                { "client_id", _idpOptions.ClientId },
-                { "client_secret", _idpOptions.ClientSecret },
-                { "username", usernameOrEmail },
-                { "password", "webauthn-verified" }, // Placeholder - WebAuthn verification serves as password proof
-                { "scope", "openid profile email offline_access" } // offline_access for refresh token
-            };
-
-            var content = new FormUrlEncodedContent(requestData);
-            var response = await _httpClient.PostAsync(tokenEndpoint, content, cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                // If password grant fails (expected if IDP doesn't accept placeholder password),
-                // fall back to client credentials for now
-                // In production, implement proper token exchange or custom grant
-                _logger.LogWarning("Password grant failed, attempting client credentials fallback. Status: {Status}, Response: {Response}",
-                    response.StatusCode, await response.Content.ReadAsStringAsync(cancellationToken));
-                
-                // Fallback to client credentials (non-user-specific)
-                requestData = new Dictionary<string, string>
-                {
-                    { "grant_type", "client_credentials" },
-                    { "client_id", _idpOptions.ClientId },
-                    { "client_secret", _idpOptions.ClientSecret },
-                    { "scope", "openid profile email" }
-                };
-
-                content = new FormUrlEncodedContent(requestData);
-                response = await _httpClient.PostAsync(tokenEndpoint, content, cancellationToken);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogError("Failed to get OAuth token. Status: {Status}, Response: {Response}",
-                        response.StatusCode, await response.Content.ReadAsStringAsync(cancellationToken));
-                    return null;
-                }
-            }
-
-            var tokenResponse = await response.Content.ReadFromJsonAsync<OAuthTokenResponse>(cancellationToken: cancellationToken);
-            return tokenResponse;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting OAuth token");
-            return null;
-        }
-    }
 
     [HttpPost("webauthn/register/options")]
     public async Task<IActionResult> GetRegistrationOptions([FromBody] WebAuthnOptionsRequest request, CancellationToken cancellationToken)
@@ -461,23 +437,26 @@ public class AuthController : ControllerBase
                 return BadRequest(new { Error = "Invalid challenge data for registration" });
             }
 
+            // In Fido2 4.0, if MakeNewCredentialAsync succeeds, it returns RegisteredPublicKeyCredential
+            // If it fails, it throws an exception, so no need to check Status
             var verificationResult = await _webauthnService.VerifyRegistrationAsync(
                 attestationResponse,
                 registrationOptions,
                 cancellationToken);
 
-            // Use dynamic to access properties (Fido2 4.0 types)
-            dynamic verificationResultDynamic = verificationResult;
-            string status = verificationResultDynamic.Status?.ToString() ?? "Unknown";
+            // Access properties using reflection (Fido2 4.0 RegisteredPublicKeyCredential type)
+            var resultType = verificationResult.GetType();
+            var idProperty = resultType.GetProperty("Id") ?? resultType.GetProperty("CredentialId");
+            var publicKeyProperty = resultType.GetProperty("PublicKey");
             
-            if (!status.Equals("Ok", StringComparison.OrdinalIgnoreCase))
+            byte[] credentialId = idProperty?.GetValue(verificationResult) as byte[] ?? Array.Empty<byte>();
+            byte[] publicKey = publicKeyProperty?.GetValue(verificationResult) as byte[] ?? Array.Empty<byte>();
+            
+            if (credentialId.Length == 0 || publicKey.Length == 0)
             {
-                return BadRequest(new { Error = "WebAuthn registration failed", Status = status });
+                _logger.LogError("Failed to extract credential ID or public key from verification result. Type: {Type}", resultType.FullName);
+                return BadRequest(new { Error = "Failed to extract credential information from verification result" });
             }
-
-            // Store the credential
-            byte[] credentialId = verificationResultDynamic.CredentialId ?? Array.Empty<byte>();
-            byte[] publicKey = verificationResultDynamic.PublicKey ?? Array.Empty<byte>();
             
             var credential = new WebAuthnCredential
             {
@@ -488,11 +467,20 @@ public class AuthController : ControllerBase
                 CreatedAt = DateTime.UtcNow
             };
 
-            await _credentialStore.StoreCredentialAsync(credential, cancellationToken);
+            // Don't store anything on server - return public key to client for local storage
+            // Client will send public key during login
+            var publicKeyBase64 = Convert.ToBase64String(publicKey);
+            var credentialIdBase64 = Convert.ToBase64String(credentialId);
 
-            _logger.LogInformation("WebAuthn registration successful for user: {UserId}", userId);
+            _logger.LogInformation("WebAuthn registration successful for user: {UserId}, CredentialId length: {CredentialIdLength}, PublicKey length: {PublicKeyLength}. Returning public key to client for local storage.", 
+                userId, credential.CredentialId.Length, credential.PublicKey.Length);
 
-            return Ok(new { Message = "Credential registered successfully" });
+            return Ok(new 
+            { 
+                Message = "Credential registered successfully",
+                PublicKey = publicKeyBase64,
+                CredentialId = credentialIdBase64
+            });
         }
         catch (Exception ex)
         {
@@ -512,6 +500,7 @@ public class WebAuthnVerifyRequest
 {
     public string ChallengeKey { get; set; } = string.Empty;
     public WebAuthnResponse? Response { get; set; }
+    public string PublicKey { get; set; } = string.Empty; // Base64 encoded public key from client
 }
 
 public class WebAuthnRegisterRequest
@@ -564,13 +553,5 @@ public class ChallengeData
 public class RefreshTokenRequest
 {
     public string RefreshToken { get; set; } = string.Empty;
-}
-
-public class OAuthTokenResponse
-{
-    public string? AccessToken { get; set; }
-    public string? TokenType { get; set; }
-    public int? ExpiresIn { get; set; }
-    public string? RefreshToken { get; set; }
 }
 

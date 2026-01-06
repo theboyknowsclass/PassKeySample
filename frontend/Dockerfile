@@ -13,6 +13,9 @@ RUN npm install
 COPY . .
 
 # Build the application
+# VITE_ENABLE_PASSKEY_REGISTRATION defaults to 'true' if not set
+ARG VITE_ENABLE_PASSKEY_REGISTRATION=true
+ENV VITE_ENABLE_PASSKEY_REGISTRATION=${VITE_ENABLE_PASSKEY_REGISTRATION}
 RUN npm run build
 
 # Production stage with nginx

@@ -3,6 +3,11 @@ using PassKeySample.Api.Models;
 
 namespace PassKeySample.Api.Services;
 
+/// <summary>
+/// In-memory implementation of WebAuthn credential store using IMemoryCache.
+/// This is a temporary implementation suitable for development/testing.
+/// For production, use a persistent store implementation (e.g., database-backed).
+/// </summary>
 public class InMemoryWebAuthnCredentialStore : IWebAuthnCredentialStore
 {
     private readonly IMemoryCache _cache;
@@ -13,8 +18,8 @@ public class InMemoryWebAuthnCredentialStore : IWebAuthnCredentialStore
         IMemoryCache cache,
         ILogger<InMemoryWebAuthnCredentialStore> logger)
     {
-        _cache = cache;
-        _logger = logger;
+        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public Task StoreCredentialAsync(WebAuthnCredential credential, CancellationToken cancellationToken = default)

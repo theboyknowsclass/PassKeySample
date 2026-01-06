@@ -39,6 +39,8 @@ apiClient.interceptors.request.use(
     if (
       url.includes('/api/auth/webauthn/options') ||
       url.includes('/api/auth/webauthn/verify') ||
+      url.includes('/api/auth/webauthn/register/options') ||
+      url.includes('/api/auth/webauthn/register') ||
       url.includes('/api/auth/refresh')
     ) {
       // For refresh endpoint, DPoP is added manually in tokenRefreshService

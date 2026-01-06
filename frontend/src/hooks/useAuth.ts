@@ -81,6 +81,6 @@ export function useAuth() {
     login,
     logout,
     getToken,
-  }
+  } as const
 }
 

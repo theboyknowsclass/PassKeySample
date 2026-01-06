@@ -1,5 +1,8 @@
+using System.Security.Cryptography.X509Certificates;
 using Fido2NetLib;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using PassKeySample.Api.Configuration;
 using PassKeySample.Api.Extensions;
 using PassKeySample.Api.Services;
@@ -51,15 +54,94 @@ using var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
 var logger = loggerFactory.CreateLogger<Program>();
 builder.Services.ConfigureIdpCertificateTrust(logger);
 
-// Add HTTP client for OIDC discovery
-builder.Services.AddHttpClient();
+// Add HTTP client for OIDC discovery with certificate validation
+builder.Services.AddHttpClient("IdpClient")
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        var handler = new HttpClientHandler();
+        
+        // Load the IDP certificate from file (if provided) for validation
+        X509Certificate2? idpCertificate = null;
+        var idpCertPath = Environment.GetEnvironmentVariable("IDP_CERTIFICATE_PATH");
+        if (!string.IsNullOrEmpty(idpCertPath) && File.Exists(idpCertPath))
+        {
+            try
+            {
+                idpCertificate = new X509Certificate2(idpCertPath);
+                logger.LogInformation("Loaded IDP certificate from {IdpCertPath} for validation", idpCertPath);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to load IDP certificate from {IdpCertPath}, will use lenient validation", idpCertPath);
+            }
+        }
+        
+        // Configure certificate validation to trust our IDP certificate
+        // In development, we'll accept certificates even with name mismatches if they match our certificate file
+        handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) =>
+        {
+            // If certificate is valid according to standard validation, accept it
+            if (errors == System.Net.Security.SslPolicyErrors.None)
+            {
+                return true;
+            }
+            
+            // For development: accept if we have the IDP certificate file and the cert matches
+            if (idpCertificate != null && cert != null)
+            {
+                // Check if the certificate thumbprint matches (same certificate)
+                var certHash = cert.GetCertHashString();
+                var idpCertHash = idpCertificate.GetCertHashString();
+                if (string.Equals(certHash, idpCertHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogDebug("Accepting certificate with mismatches - matches configured IDP certificate");
+                    return true;
+                }
+                
+                // Also check certificate chain to see if our certificate is in the chain
+                if (chain != null && chain.ChainElements.Count > 0)
+                {
+                    foreach (var element in chain.ChainElements)
+                    {
+                        var chainCertHash = element.Certificate.GetCertHashString();
+                        if (string.Equals(chainCertHash, idpCertHash, StringComparison.OrdinalIgnoreCase))
+                        {
+                            logger.LogDebug("Accepting certificate - configured IDP certificate found in chain");
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            // For development: be lenient with certificate name mismatches if certificate chain is present
+            // This allows self-signed certificates to work in Docker environments
+            if ((errors == System.Net.Security.SslPolicyErrors.RemoteCertificateNameMismatch ||
+                 errors == (System.Net.Security.SslPolicyErrors.RemoteCertificateNameMismatch | System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors)) &&
+                chain != null && chain.ChainElements.Count > 0)
+            {
+                logger.LogDebug("Accepting certificate with name mismatch for development (Docker environment)");
+                return true;
+            }
+            
+            logger.LogWarning("Certificate validation failed. Errors: {Errors}", errors);
+            return false;
+        };
+        
+        return handler;
+    });
 builder.Services.AddScoped<OidcDiscoveryService>();
 
 // Register WebAuthn services
+// Credential Store: Use InMemoryWebAuthnCredentialStore for development/testing.
+// For production, implement PersistentWebAuthnCredentialStore (e.g., Entity Framework, Dapper, etc.)
+// and swap the registration below. The interface IWebAuthnCredentialStore abstracts the storage implementation.
+// Example for persistent store: builder.Services.AddScoped<IWebAuthnCredentialStore, DatabaseWebAuthnCredentialStore>();
 builder.Services.AddScoped<IWebAuthnCredentialStore, InMemoryWebAuthnCredentialStore>();
 builder.Services.AddScoped<IIdpUserService, OidcIdpUserService>();
 builder.Services.AddScoped<IWebAuthnService, WebAuthnService>();
 builder.Services.AddScoped<IDPoPValidator, DPoPValidator>();
+builder.Services.AddScoped<IJwtTokenValidator, JwtTokenValidator>();
+builder.Services.AddScoped<ITokenExchangeService, TokenExchangeService>();
 
 // Configure CORS
 builder.Services.AddCors(options =>

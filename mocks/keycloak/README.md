@@ -20,6 +20,8 @@ The realm file contains only the essential configuration:
 - **Client ID:** `passkeysample-api`
 - **Client Secret:** `api-client-secret-change-in-production`
 - **Enabled Flows:** Standard Flow, Direct Access Grants, Service Accounts
+- **Token Exchange:** Enabled via `token.exchange` attribute
+- **Note:** In Keycloak 26.2+, after realm import, you may need to manually enable "Standard token exchange" capability in Client Settings → Capabilities tab
 
 ### Users
 

@@ -1,5 +1,7 @@
 import { useForm } from 'react-hook-form'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { isPasskeyRegistrationEnabled } from '../config/appConfig'
 import './LoginPage.css'
 
 interface LoginFormData {
@@ -7,7 +9,8 @@ interface LoginFormData {
 }
 
 function LoginPage() {
-  const { login, isLoading, error } = useAuth()
+  const { login, isLoading, error, isAuthenticated } = useAuth()
+  const navigate = useNavigate()
   const {
     register,
     handleSubmit,
@@ -17,12 +20,17 @@ function LoginPage() {
     mode: 'onBlur',
   })
 
+  // Redirect if already authenticated
+  if (isAuthenticated) {
+    navigate('/dashboard', { replace: true })
+    return null
+  }
+
   const onSubmit = async (data: LoginFormData) => {
     try {
       await login(data.usernameOrEmail)
-      // Login successful - tokens are stored, user is authenticated
-      // You can redirect or show success message here
-      console.log('Login successful')
+      // Login successful - redirect to dashboard
+      navigate('/dashboard', { replace: true })
     } catch (err) {
       // Error is handled by useAuth hook, but we can also set form error
       const errorMessage =
@@ -76,6 +84,14 @@ function LoginPage() {
           >
             {isSubmitting || isLoading ? 'Signing in...' : 'Sign In'}
           </button>
+
+          {isPasskeyRegistrationEnabled() && (
+            <div className="login-footer">
+              <Link to="/register" className="register-link">
+                Register Passkey
+              </Link>
+            </div>
+          )}
         </form>
       </div>
     </div>

@@ -1,4 +1,5 @@
 using Fido2NetLib;
+using Fido2NetLib.Objects;
 
 namespace PassKeySample.Api.Services;
 
@@ -9,4 +10,3 @@ public interface IWebAuthnService
     Task<AssertionOptions> GenerateAssertionOptionsAsync(string userId, List<object>? allowedCredentials = null, CancellationToken cancellationToken = default);
     Task<object> VerifyAssertionAsync(AuthenticatorAssertionRawResponse assertionResponse, AssertionOptions originalOptions, byte[] storedCredentialId, byte[] storedPublicKey, uint storedCounter, CancellationToken cancellationToken = default);
 }
-
