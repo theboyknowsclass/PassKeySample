@@ -1,31 +1,39 @@
 using System.Text;
-using PassKeySample.Api.Services;
+using PassKeySample.Api.Attributes;
+using PassKeySample.Api.Services.Authentication;
 
 namespace PassKeySample.Api.Middleware;
 
-public class DPoPValidationMiddleware
+public class AuthenticationMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly ILogger<DPoPValidationMiddleware> _logger;
-    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<AuthenticationMiddleware> _logger;
 
-    public DPoPValidationMiddleware(
+    public AuthenticationMiddleware(
         RequestDelegate next,
-        ILogger<DPoPValidationMiddleware> logger,
-        IServiceProvider serviceProvider)
+        ILogger<AuthenticationMiddleware> logger)
     {
         _next = next;
         _logger = logger;
-        _serviceProvider = serviceProvider;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Skip DPoP validation for certain paths
-        var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
-        if (path.StartsWith("/api/auth/") || 
-            path.StartsWith("/swagger") || 
-            path == "/")
+        // Check if endpoint explicitly requires authentication via attribute
+        var endpoint = context.GetEndpoint();
+        var requireAuthentication = endpoint?.Metadata.GetMetadata<RequireAuthenticationAttribute>() != null;
+        var skipAuthentication = endpoint?.Metadata.GetMetadata<SkipAuthenticationAttribute>() != null;
+
+        // If SkipAuthentication is present, skip validation
+        if (skipAuthentication)
+        {
+            await _next(context);
+            return;
+        }
+
+        // If endpoint doesn't explicitly require authentication, skip validation (opt-in model)
+        // Swagger, /api/auth/, and other unmarked endpoints will automatically skip here
+        if (!requireAuthentication)
         {
             await _next(context);
             return;
@@ -83,9 +91,6 @@ public class DPoPValidationMiddleware
             return;
         }
 
-        // Store JWT validation result in context for use by controllers
-        context.Items["JwtValidationResult"] = jwtValidationResult;
-
         // Step 2: Validate DPoP proof (bound to the validated token)
         var httpMethod = context.Request.Method;
         var httpUrl = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.Path}{context.Request.QueryString}";
@@ -109,7 +114,11 @@ public class DPoPValidationMiddleware
             return;
         }
 
-        // Store validation result in context for use by controllers
+        // All validation passed - add header to response
+        context.Response.Headers.Append("X-DPoP-Validated", "true");
+        
+        // Store validation results in context for authorization middleware/controllers
+        context.Items["JwtValidationResult"] = jwtValidationResult;
         context.Items["DPoPValidationResult"] = validationResult;
 
         await _next(context);

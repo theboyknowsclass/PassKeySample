@@ -8,8 +8,7 @@ The credential store uses the **Strategy Pattern** to abstract storage implement
 
 ```
 IWebAuthnCredentialStore (Interface)
-├── InMemoryWebAuthnCredentialStore (In-memory implementation)
-└── PersistentWebAuthnCredentialStore (Abstract base for persistent implementations)
+└── InMemoryWebAuthnCredentialStore (In-memory implementation for dev/testing)
 ```
 
 ## Interface
@@ -22,7 +21,7 @@ IWebAuthnCredentialStore (Interface)
 - `UpdateCounterAsync()` - Update signature counter (for replay attack prevention)
 - `DeleteCredentialAsync()` - Delete a credential
 
-## Implementations
+## Current Implementation
 
 ### InMemoryWebAuthnCredentialStore
 
@@ -33,39 +32,36 @@ IWebAuthnCredentialStore (Interface)
   - Not suitable for production
   - No data persistence
 
-### PersistentWebAuthnCredentialStore
-
-- **Purpose**: Base class for production implementations
-- **Storage**: Abstract - implement your own persistent storage
-- **Usage**: Inherit from this class and implement the abstract methods
-
 ## Creating a Persistent Implementation
+
+For production use, implement `IWebAuthnCredentialStore` with your preferred storage backend.
 
 ### Example: Entity Framework Implementation
 
 ```csharp
-public class DatabaseWebAuthnCredentialStore : PersistentWebAuthnCredentialStore
+public class DatabaseWebAuthnCredentialStore : IWebAuthnCredentialStore
 {
     private readonly ApplicationDbContext _context;
+    private readonly ILogger<DatabaseWebAuthnCredentialStore> _logger;
 
     public DatabaseWebAuthnCredentialStore(
         ApplicationDbContext context,
         ILogger<DatabaseWebAuthnCredentialStore> logger)
-        : base(logger)
     {
         _context = context;
+        _logger = logger;
     }
 
-    public override async Task StoreCredentialAsync(
+    public async Task StoreCredentialAsync(
         WebAuthnCredential credential, 
         CancellationToken cancellationToken = default)
     {
         _context.WebAuthnCredentials.Add(credential);
         await _context.SaveChangesAsync(cancellationToken);
-        Logger.LogInformation("Stored WebAuthn credential for user: {UserId}", credential.UserId);
+        _logger.LogInformation("Stored WebAuthn credential for user: {UserId}", credential.UserId);
     }
 
-    public override async Task<List<WebAuthnCredential>> GetCredentialsAsync(
+    public async Task<List<WebAuthnCredential>> GetCredentialsAsync(
         string userId, 
         CancellationToken cancellationToken = default)
     {
@@ -101,5 +97,6 @@ builder.Services.AddScoped<IWebAuthnCredentialStore, DatabaseWebAuthnCredentialS
 
 - The interface is storage-agnostic - it doesn't know about databases, caches, etc.
 - All implementations are registered via Dependency Injection
+- Located in `PassKeySample.Api/Services/WebAuthn/` following domain-based organization
 - The consuming code (`WebAuthnService`, `AuthController`) only depends on the interface
 

@@ -1,18 +1,22 @@
 using Microsoft.Extensions.Caching.Memory;
 using PassKeySample.Api.Models;
 
-namespace PassKeySample.Api.Services;
+namespace PassKeySample.Api.Services.WebAuthn;
 
 /// <summary>
 /// In-memory implementation of WebAuthn credential store using IMemoryCache.
-/// This is a temporary implementation suitable for development/testing.
-/// For production, use a persistent store implementation (e.g., database-backed).
+/// Suitable for development and testing only - data is lost on application restart.
+/// For production, implement a persistent store (e.g., database-backed).
 /// </summary>
 public class InMemoryWebAuthnCredentialStore : IWebAuthnCredentialStore
 {
     private readonly IMemoryCache _cache;
     private readonly ILogger<InMemoryWebAuthnCredentialStore> _logger;
     private const string CacheKeyPrefix = "webauthn_cred_";
+    
+    // TODO: REMOVE - DEBUG CODE ONLY
+    // Track all user IDs for debugging purposes
+    private const string AllUsersListKey = $"{CacheKeyPrefix}all_users_list";
 
     public InMemoryWebAuthnCredentialStore(
         IMemoryCache cache,
@@ -35,9 +39,9 @@ public class InMemoryWebAuthnCredentialStore : IWebAuthnCredentialStore
         
         // Also maintain a list of credential IDs for the user
         var userCredsKey = GetUserCredentialsKey(credential.UserId);
-        if (_cache.TryGetValue<List<byte[]>>(userCredsKey, out var credIds))
+        if (_cache.TryGetValue<List<byte[]>>(userCredsKey, out var credIds) && credIds != null)
         {
-            if (!credIds!.Any(id => id.SequenceEqual(credential.CredentialId)))
+            if (!credIds.Any(id => id.SequenceEqual(credential.CredentialId)))
             {
                 credIds.Add(credential.CredentialId);
                 _cache.Set(userCredsKey, credIds, cacheOptions);
@@ -46,6 +50,18 @@ public class InMemoryWebAuthnCredentialStore : IWebAuthnCredentialStore
         else
         {
             _cache.Set(userCredsKey, new List<byte[]> { credential.CredentialId }, cacheOptions);
+        }
+        
+        // TODO: REMOVE - DEBUG CODE ONLY
+        // Track user ID in the all users list
+        if (_cache.TryGetValue<HashSet<string>>(AllUsersListKey, out var allUsers) && allUsers != null)
+        {
+            allUsers.Add(credential.UserId);
+            _cache.Set(AllUsersListKey, allUsers, cacheOptions);
+        }
+        else
+        {
+            _cache.Set(AllUsersListKey, new HashSet<string> { credential.UserId }, cacheOptions);
         }
 
         _logger.LogInformation("Stored WebAuthn credential for user: {UserId}", credential.UserId);
@@ -126,6 +142,36 @@ public class InMemoryWebAuthnCredentialStore : IWebAuthnCredentialStore
     private static string GetUserCredentialsKey(string userId)
     {
         return $"{CacheKeyPrefix}user_{userId}_list";
+    }
+
+    // TODO: REMOVE - DEBUG CODE ONLY
+    // This method is for debugging purposes only and should be removed before production.
+    // Returns all users and their credentials currently stored in the credential store.
+    public Dictionary<string, List<WebAuthnCredential>> GetAllUsersDebug()
+    {
+        var result = new Dictionary<string, List<WebAuthnCredential>>();
+        
+        try
+        {
+            // Get the list of all user IDs we're tracking
+            if (_cache.TryGetValue<HashSet<string>>(AllUsersListKey, out var allUserIds) && allUserIds != null)
+            {
+                foreach (var userId in allUserIds)
+                {
+                    var credentials = GetCredentialsAsync(userId).GetAwaiter().GetResult();
+                    if (credentials.Count > 0)
+                    {
+                        result[userId] = credentials;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to enumerate all users from credential store (debug method): {Error}", ex.Message);
+        }
+        
+        return result;
     }
 }
 

@@ -81,7 +81,7 @@ To add support for a new IdP:
 
 ### Keycloak
 - Tested with Keycloak 26.2.0
-- Requires manual configuration of impersonation roles (see `mocks/keycloak/SETUP_TOKEN_EXCHANGE.md`)
+- Token Exchange enabled via `standard.token.exchange.enabled` attribute in realm configuration
 
 ### ADFS
 - Should work with Token Exchange + `requested_subject`

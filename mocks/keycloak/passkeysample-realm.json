@@ -13,6 +13,7 @@
       "publicClient": false,
       "protocol": "openid-connect",
       "attributes": {
+        "standard.token.exchange.enabled": "true",
         "token.exchange": "true",
         "oauth2.device.authorization.grant.enabled": "false"
       },
@@ -23,10 +24,6 @@
         "profile",
         "roles",
         "email"
-      ],
-      "optionalClientScopes": [
-        "offline_access",
-        "microprofile-jwt"
       ],
       "protocolMappers": [
         {
@@ -40,10 +37,35 @@
             "id.token.claim": "true",
             "access.token.claim": "true"
           }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "true"
+          }
         }
       ]
     }
   ],
+  "roles": {
+    "realm": [
+      {
+        "name": "role1",
+        "description": "Role 1 for testing authorization"
+      },
+      {
+        "name": "role2",
+        "description": "Role 2 for testing authorization"
+      }
+    ]
+  },
   "users": [
     {
       "username": "admin",
@@ -68,7 +90,21 @@
           "value": "user123",
           "temporary": false
         }
-      ]
+      ],
+      "realmRoles": ["role1"]
+    },
+    {
+      "username": "user2",
+      "enabled": true,
+      "email": "user2@passkeysample.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["role2"]
     }
   ]
 }

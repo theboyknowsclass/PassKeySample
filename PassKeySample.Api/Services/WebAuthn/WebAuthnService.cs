@@ -1,9 +1,12 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
-using PassKeySample.Api.Configuration;
 
-namespace PassKeySample.Api.Services;
+namespace PassKeySample.Api.Services.WebAuthn;
 
+/// <summary>
+/// Implementation of WebAuthn operations using the Fido2NetLib library.
+/// Handles passkey registration and authentication ceremonies.
+/// </summary>
 public class WebAuthnService : IWebAuthnService
 {
     private readonly IFido2 _fido2;

@@ -2,35 +2,62 @@ import { useAuth } from '../hooks/useAuth'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from 'react-query'
 import { apiClient } from '../config/api'
+import { getJwtClaims, getAccessToken } from '../services/tokenStorage'
 import './DashboardPage.css'
 
 interface VersionResponse {
   version: string
-  authenticatedUser?: string
-  tokenIssuer?: string
-  tokenExpiresAt?: string
-  dpopValidated: boolean
-  userClaims?: Record<string, unknown>
+  dpopValidated?: boolean
+  message?: string
 }
 
 function DashboardPage() {
   const { isAuthenticated, logout } = useAuth()
   const navigate = useNavigate()
 
-  // React Query to fetch version from protected endpoint
+  // React Query for Role1 endpoint
   const {
-    data: versionData,
-    isLoading: isLoadingVersion,
-    error: versionError,
-    refetch: fetchVersion,
-    isFetching: isFetchingVersion,
-  } = useQuery<VersionResponse>({
-    queryKey: ['version'],
+    data: role1Data,
+    isLoading: isLoadingRole1,
+    error: role1Error,
+    refetch: fetchRole1,
+    isFetching: isFetchingRole1,
+  } = useQuery<VersionResponse, Error>({
+    queryKey: ['role1-version'],
     queryFn: async () => {
-      const response = await apiClient.get<VersionResponse>('/api/version')
-      return response.data
+      const response = await apiClient.get<VersionResponse>('/api/role1version')
+      
+      const dpopValidated = response.headers['x-dpop-validated'] === 'true'
+      
+      return {
+        ...response.data,
+        dpopValidated
+      }
     },
-    enabled: false, // Don't fetch automatically, only on button click
+    enabled: false,
+    retry: false,
+  })
+
+  // React Query for Role2 endpoint
+  const {
+    data: role2Data,
+    isLoading: isLoadingRole2,
+    error: role2Error,
+    refetch: fetchRole2,
+    isFetching: isFetchingRole2,
+  } = useQuery<VersionResponse, Error>({
+    queryKey: ['role2-version'],
+    queryFn: async () => {
+      const response = await apiClient.get<VersionResponse>('/api/role2version')
+      
+      const dpopValidated = response.headers['x-dpop-validated'] === 'true'
+      
+      return {
+        ...response.data,
+        dpopValidated
+      }
+    },
+    enabled: false,
     retry: false,
   })
 
@@ -44,14 +71,12 @@ function DashboardPage() {
     return null
   }
 
-  // Extract error message for display
-  const errorMessage = versionError
-    ? versionError instanceof Error
-      ? versionError.message
-      : typeof versionError === 'string'
-      ? versionError
-      : 'Failed to fetch version'
-    : null
+  // Decode JWT locally for display
+  const accessToken = getAccessToken()
+  const jwtClaims = accessToken ? getJwtClaims() : null
+  const authenticatedUser = jwtClaims?.preferred_username || jwtClaims?.sub || null
+  const tokenIssuer = jwtClaims?.iss || null
+  const tokenExpiresAt = jwtClaims?.exp ? new Date(jwtClaims.exp * 1000) : null
 
   return (
     <div className="dashboard-container">
@@ -77,62 +102,122 @@ function DashboardPage() {
           </div>
 
           <div className="info-section">
-            <h2>Test Protected Endpoint</h2>
-            <button
-              onClick={() => fetchVersion()}
-              disabled={isFetchingVersion || isLoadingVersion}
-              className="test-button"
-            >
-              {isFetchingVersion || isLoadingVersion
-                ? 'Loading...'
-                : 'Get API Version (Protected)'}
-            </button>
+            <h2>Test Protected Endpoints</h2>
+            
+            <div className="button-group">
+              {/* Role1 Endpoint */}
+              <div style={{ marginBottom: '20px' }}>
+                <button
+                  onClick={() => fetchRole1()}
+                  disabled={isFetchingRole1 || isLoadingRole1}
+                  className="test-button"
+                >
+                  {isFetchingRole1 || isLoadingRole1
+                    ? 'Loading...'
+                    : 'Role 1 Version'}
+                </button>
 
-            {versionData && (
-              <div className="version-result">
-                <h3>Response:</h3>
-                <div className="result-box">
-                  <p>
-                    <strong>Version:</strong> {versionData.version}
-                  </p>
-                  {versionData.authenticatedUser && (
-                    <p>
-                      <strong>User:</strong> {versionData.authenticatedUser}
-                    </p>
-                  )}
-                  {versionData.tokenIssuer && (
-                    <p>
-                      <strong>Issuer:</strong> {versionData.tokenIssuer}
-                    </p>
-                  )}
-                  {versionData.tokenExpiresAt && (
-                    <p>
-                      <strong>Expires:</strong>{' '}
-                      {new Date(versionData.tokenExpiresAt).toLocaleString()}
-                    </p>
-                  )}
-                  <p>
-                    <strong>DPoP Validated:</strong>{' '}
-                    {versionData.dpopValidated ? '✓ Yes' : '✗ No'}
-                  </p>
-                  {versionData.userClaims && (
-                    <details className="claims-details">
-                      <summary>User Claims</summary>
-                      <pre className="claims-json">
-                        {JSON.stringify(versionData.userClaims, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                </div>
-              </div>
-            )}
+                {role1Data && (
+                  <div className="version-result">
+                    <div className="result-box">
+                      <p>
+                        <strong>Version:</strong> {role1Data.version}
+                      </p>
+                      {role1Data.message && (
+                        <p>
+                          <strong>Message:</strong> {role1Data.message}
+                        </p>
+                      )}
+                      <p>
+                        <strong>DPoP Validated:</strong>{' '}
+                        {role1Data.dpopValidated ? '✓ Yes' : '✗ No'}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
-            {errorMessage && (
-              <div className="error-box">
-                <strong>Error:</strong> {errorMessage}
+                {role1Error && (
+                  <div className="error-box">
+                    <strong>Error:</strong>{' '}
+                    {role1Error instanceof Error
+                      ? role1Error.message
+                      : String(role1Error)}
+                  </div>
+                )}
               </div>
-            )}
+
+              {/* Role2 Endpoint */}
+              <div style={{ marginBottom: '20px' }}>
+                <button
+                  onClick={() => fetchRole2()}
+                  disabled={isFetchingRole2 || isLoadingRole2}
+                  className="test-button"
+                >
+                  {isFetchingRole2 || isLoadingRole2
+                    ? 'Loading...'
+                    : 'Role 2 Version'}
+                </button>
+
+                {role2Data && (
+                  <div className="version-result">
+                    <div className="result-box">
+                      <p>
+                        <strong>Version:</strong> {role2Data.version}
+                      </p>
+                      {role2Data.message && (
+                        <p>
+                          <strong>Message:</strong> {role2Data.message}
+                        </p>
+                      )}
+                      <p>
+                        <strong>DPoP Validated:</strong>{' '}
+                        {role2Data.dpopValidated ? '✓ Yes' : '✗ No'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {role2Error && (
+                  <div className="error-box">
+                    <strong>Error:</strong>{' '}
+                    {role2Error instanceof Error
+                      ? role2Error.message
+                      : String(role2Error)}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
+
+          {/* Display JWT info decoded locally */}
+          {jwtClaims && (
+            <div className="info-section">
+              <h2>Token Information</h2>
+              <div className="result-box">
+                {authenticatedUser && (
+                  <p>
+                    <strong>User:</strong> {authenticatedUser}
+                  </p>
+                )}
+                {tokenIssuer && (
+                  <p>
+                    <strong>Issuer:</strong> {tokenIssuer}
+                  </p>
+                )}
+                {tokenExpiresAt && (
+                  <p>
+                    <strong>Expires:</strong> {tokenExpiresAt.toLocaleString()}
+                  </p>
+                )}
+                <details className="claims-details">
+                  <summary>JWT Claims</summary>
+                  <pre className="claims-json">
+                    {JSON.stringify(jwtClaims, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            </div>
+          )}
         </div>
 
         <button onClick={handleLogout} className="logout-button">

@@ -100,7 +100,8 @@ The `passkeysample` realm is automatically imported on startup with:
 - **Client Secret:** `api-client-secret-change-in-production`
 - **Users:**
   - `admin` / `admin123` (admin role)
-  - `user1` / `user123` (regular user)
+  - `user1` / `user123` (role1)
+  - `user2` / `user123` (role2)
 
 ## API Endpoints
 
@@ -182,11 +183,44 @@ Note: When running locally, update the `BaseUrl` in `appsettings.Development.jso
 docker build -t passkeysample-api -f PassKeySample.Api/Dockerfile .
 ```
 
+## Architecture
+
+### Services Organization
+
+The API services are organized by domain for better maintainability and adherence to SOLID principles:
+
+```
+Services/
+├── Authentication/     # JWT & DPoP validation
+│   ├── IDPoPValidator.cs
+│   ├── IJwtTokenValidator.cs
+│   └── implementations
+├── Identity/          # OIDC & Token Exchange
+│   ├── IIdpUserService.cs
+│   ├── ITokenExchangeService.cs
+│   ├── OidcDiscoveryService.cs
+│   └── implementations
+└── WebAuthn/          # Passkey operations
+    ├── IWebAuthnCredentialStore.cs
+    ├── IWebAuthnService.cs
+    └── implementations
+```
+
+**Key Features:**
+- Domain-based organization (Authentication, Identity, WebAuthn)
+- All interfaces documented with XML comments
+- Follows Dependency Inversion Principle (DIP)
+- Easy to test and mock
+
 ## Documentation
 
-- [Certificate Management Guide](docs/CERTIFICATE_MANAGEMENT.md)
-- [Certificate Trust Direction](docs/CERTIFICATE_TRUST.md)
-- [API to Keycloak Trust](docs/API_TO_KEYCLOAK_TRUST.md)
+### Architecture & Design
+- [Certificate Trust Architecture](docs/API_TO_KEYCLOAK_TRUST.md) - How certificate trust works between services
+- [IdP-Agnostic Architecture](docs/IDP_AGNOSTIC_ARCHITECTURE.md) - OIDC-compliant identity provider integration
+- [WebAuthn Credential Store](docs/WEBAUTHN_CREDENTIAL_STORE.md) - Passkey storage abstraction
+
+### Developer Guides
+- [Development Certificate Setup](docs/CERTIFICATE_MANAGEMENT.md) - How to generate and trust development certificates
 
 ## Notes
 

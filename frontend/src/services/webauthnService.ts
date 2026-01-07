@@ -23,8 +23,6 @@ export interface WebAuthnRegistrationOptionsResponse {
 
 export interface WebAuthnRegistrationResponse {
   message: string
-  publicKey: string // Base64 encoded public key for client storage
-  credentialId: string // Base64 encoded credential ID for client storage
 }
 
 /**
@@ -120,30 +118,16 @@ function convertWebAuthnResponse(
 export async function verifyWebAuthn(
   challengeKey: string,
   credential: PublicKeyCredential,
-  response: AuthenticatorAssertionResponse,
-  usernameOrEmail: string
+  response: AuthenticatorAssertionResponse
 ): Promise<WebAuthnVerifyResponse> {
   const webAuthnResponse = convertWebAuthnResponse(credential, response)
-  
-  // Retrieve public key from local storage
-  const storageKey = `webauthn_cred_${usernameOrEmail.toLowerCase()}`
-  const storedCredential = localStorage.getItem(storageKey)
-  
-  if (!storedCredential) {
-    throw new Error('Public key not found. Please register your passkey first.')
-  }
-  
-  const credentialData = JSON.parse(storedCredential)
-  if (!credentialData.publicKey) {
-    throw new Error('Invalid credential data. Please register your passkey again.')
-  }
 
+  // Server looks up credential by credential ID from the WebAuthn response
   const verifyResponse = await apiClient.post<WebAuthnVerifyResponse>(
     '/api/auth/webauthn/verify',
     {
       challengeKey,
       response: webAuthnResponse,
-      publicKey: credentialData.publicKey,
     }
   )
 
@@ -182,8 +166,8 @@ export async function authenticateWithWebAuthn(
 
   const response = credential.response as AuthenticatorAssertionResponse
 
-  // Step 3: Verify with backend (pass usernameOrEmail to retrieve public key)
-  return verifyWebAuthn(challengeKey, credential, response, usernameOrEmail)
+  // Step 3: Verify with backend (server looks up credential by credential ID)
+  return verifyWebAuthn(challengeKey, credential, response)
 }
 
 /**
@@ -332,17 +316,8 @@ export async function registerWithWebAuthn(
   const response = credential.response as AuthenticatorAttestationResponse
 
   // Step 3: Register with backend
+  // Server stores credentials and looks them up by credential ID during login
   const registrationResult = await registerWebAuthn(usernameOrEmail, challengeKey, credential, response)
-  
-  // Step 4: Store public key and credential ID locally for use during login
-  if (registrationResult.publicKey && registrationResult.credentialId) {
-    const storageKey = `webauthn_cred_${usernameOrEmail.toLowerCase()}`
-    localStorage.setItem(storageKey, JSON.stringify({
-      publicKey: registrationResult.publicKey,
-      credentialId: registrationResult.credentialId,
-      timestamp: Date.now()
-    }))
-  }
   
   return registrationResult
 }

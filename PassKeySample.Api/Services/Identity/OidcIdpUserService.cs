@@ -1,11 +1,12 @@
-using System.Net.Http.Json;
-using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
 using PassKeySample.Api.Configuration;
 
-namespace PassKeySample.Api.Services;
+namespace PassKeySample.Api.Services.Identity;
 
+/// <summary>
+/// OIDC-based implementation of user lookup service.
+/// Queries the Identity Provider to verify user existence and retrieve user IDs.
+/// </summary>
 public class OidcIdpUserService : IIdpUserService
 {
     private readonly IdentityProviderOptions _options;
@@ -96,14 +97,6 @@ public class OidcIdpUserService : IIdpUserService
             _logger.LogError(ex, "Failed to check if user exists: {UsernameOrEmail}", usernameOrEmail);
             return null;
         }
-    }
-
-    private async Task<string?> GetServiceAccountTokenAsync(CancellationToken cancellationToken)
-    {
-        // This would use client credentials grant to get a service account token
-        // For now, return null as service account may not be configured
-        // TODO: Implement service account token retrieval when credentials are available
-        return null;
     }
 }
 

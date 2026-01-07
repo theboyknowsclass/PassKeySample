@@ -3,9 +3,14 @@ using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using PassKeySample.Api.Configuration;
+using PassKeySample.Api.Services.Identity;
 
-namespace PassKeySample.Api.Services;
+namespace PassKeySample.Api.Services.Authentication;
 
+/// <summary>
+/// Validates JWT access tokens using OIDC discovery for signing keys.
+/// Supports automatic key refresh and caching via ConfigurationManager.
+/// </summary>
 public class JwtTokenValidator : IJwtTokenValidator
 {
     private readonly OidcDiscoveryService _discoveryService;
@@ -105,8 +110,42 @@ public class JwtTokenValidator : IJwtTokenValidator
             SecurityToken validatedToken;
             var principal = handler.ValidateToken(token, validationParameters, out validatedToken);
 
-            // Extract claims
-            var claims = principal.Claims.ToDictionary(c => c.Type, c => (object)c.Value);
+            // Extract claims - handle duplicate claim types (e.g., multiple 'aud' values)
+            // Group by claim type and take the first value, or combine into array for special cases
+            var claims = new Dictionary<string, object>();
+            foreach (var claim in principal.Claims)
+            {
+                if (claims.ContainsKey(claim.Type))
+                {
+                    // For duplicate claims, handle special cases
+                    if (claim.Type == "aud")
+                    {
+                        // For audience, if it's already a list, add to it; otherwise create a list
+                        if (claims[claim.Type] is List<string> audList)
+                        {
+                            if (!audList.Contains(claim.Value))
+                            {
+                                audList.Add(claim.Value);
+                            }
+                        }
+                        else
+                        {
+                            var existingValue = claims[claim.Type].ToString() ?? string.Empty;
+                            claims[claim.Type] = new List<string> { existingValue, claim.Value };
+                        }
+                    }
+                    else
+                    {
+                        // For other duplicate claims, keep the first value
+                        // (or you could combine them, but for most claims the first is sufficient)
+                        _logger.LogDebug("Duplicate claim type '{ClaimType}' found, keeping first value: {FirstValue}", claim.Type, claims[claim.Type]);
+                    }
+                }
+                else
+                {
+                    claims[claim.Type] = claim.Value;
+                }
+            }
             
             // Extract subject - try multiple claim types for compatibility
             var subject = principal.FindFirst("sub")?.Value 

@@ -1,11 +1,14 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
 
-namespace PassKeySample.Api.Services;
+namespace PassKeySample.Api.Services.Authentication;
 
+/// <summary>
+/// Validates DPoP (Demonstrating Proof-of-Possession) proofs per RFC 9449.
+/// Ensures access tokens are bound to the client's cryptographic key.
+/// </summary>
 public class DPoPValidator : IDPoPValidator
 {
     private readonly IMemoryCache _cache;

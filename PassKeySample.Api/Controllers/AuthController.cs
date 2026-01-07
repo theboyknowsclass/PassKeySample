@@ -6,7 +6,8 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using PassKeySample.Api.Configuration;
 using PassKeySample.Api.Models;
-using PassKeySample.Api.Services;
+using PassKeySample.Api.Services.Identity;
+using PassKeySample.Api.Services.WebAuthn;
 
 namespace PassKeySample.Api.Controllers;
 
@@ -47,6 +48,19 @@ public class AuthController : ControllerBase
 
         try
         {
+            // TODO: REMOVE - DEBUG CODE ONLY
+            // Log all users in credential store for debugging
+            if (_credentialStore is InMemoryWebAuthnCredentialStore inMemoryStore)
+            {
+                var allUsers = inMemoryStore.GetAllUsersDebug();
+                _logger.LogInformation("DEBUG: All users in credential store: {UserCount} users", allUsers.Count);
+                foreach (var user in allUsers)
+                {
+                    _logger.LogInformation("DEBUG: User {UserId} has {CredentialCount} credential(s)", 
+                        user.Key, user.Value.Count);
+                }
+            }
+
             // Always check if user exists, but don't reveal the result
             var userExists = await _idpUserService.UserExistsAsync(request.UsernameOrEmail, cancellationToken);
             var userId = await _idpUserService.GetUserIdAsync(request.UsernameOrEmail, cancellationToken);
@@ -116,6 +130,19 @@ public class AuthController : ControllerBase
 
         try
         {
+            // TODO: REMOVE - DEBUG CODE ONLY
+            // Log all users in credential store for debugging
+            if (_credentialStore is InMemoryWebAuthnCredentialStore inMemoryStore)
+            {
+                var allUsers = inMemoryStore.GetAllUsersDebug();
+                _logger.LogInformation("DEBUG: All users in credential store: {UserCount} users", allUsers.Count);
+                foreach (var user in allUsers)
+                {
+                    _logger.LogInformation("DEBUG: User {UserId} has {CredentialCount} credential(s)", 
+                        user.Key, user.Value.Count);
+                }
+            }
+
             // Retrieve challenge from cache
             if (!_challengeCache.TryGetValue<ChallengeData>(request.ChallengeKey, out var challengeData) || challengeData == null)
             {
@@ -150,49 +177,18 @@ public class AuthController : ControllerBase
             // The credential ID from frontend is base64url encoded, not regular base64
             var credentialId = Base64UrlDecode(request.Response.Id);
             
-            // Get public key from client request (client stores it locally after registration)
-            if (string.IsNullOrWhiteSpace(request.PublicKey))
-            {
-                _logger.LogWarning("Public key not provided in login request for user: {UserId}", challengeData.UserId);
-                return BadRequest(new { Error = "Authentication failed" });
-            }
-            
-            byte[] publicKey;
-            try
-            {
-                publicKey = Convert.FromBase64String(request.PublicKey);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Invalid public key format in login request for user: {UserId}", challengeData.UserId);
-                return BadRequest(new { Error = "Authentication failed" });
-            }
-            
-            // Check if credential already exists in main store (for session persistence)
+            // Look up credential from server store (proper WebAuthn implementation)
             var credentials = await _credentialStore.GetCredentialsAsync(challengeData.UserId, cancellationToken);
             var credential = credentials.FirstOrDefault(c => c.CredentialId.SequenceEqual(credentialId));
             
             if (credential == null)
             {
-                // First time using this credential - store it in memory for the session
-                credential = new WebAuthnCredential
-                {
-                    UserId = challengeData.UserId,
-                    CredentialId = credentialId,
-                    PublicKey = publicKey,
-                    Counter = 0,
-                    CreatedAt = DateTime.UtcNow
-                };
-                await _credentialStore.StoreCredentialAsync(credential, cancellationToken);
-                _logger.LogInformation("Stored credential in memory for session for user: {UserId}", challengeData.UserId);
+                _logger.LogWarning("Credential not found for user: {UserId}, credentialId length: {CredentialIdLength}", 
+                    challengeData.UserId, credentialId.Length);
+                return BadRequest(new { Error = "Authentication failed" });
             }
-            else
-            {
-                // Update public key if it changed (shouldn't happen, but just in case)
-                credential.PublicKey = publicKey;
-                await _credentialStore.StoreCredentialAsync(credential, cancellationToken);
-                _logger.LogInformation("Using existing credential from memory store for user: {UserId}", challengeData.UserId);
-            }
+            
+            _logger.LogInformation("Found credential in store for user: {UserId}", challengeData.UserId);
 
             // Use stored assertion options
             var assertionOptions = challengeData.AssertionOptions;
@@ -467,19 +463,15 @@ public class AuthController : ControllerBase
                 CreatedAt = DateTime.UtcNow
             };
 
-            // Don't store anything on server - return public key to client for local storage
-            // Client will send public key during login
-            var publicKeyBase64 = Convert.ToBase64String(publicKey);
-            var credentialIdBase64 = Convert.ToBase64String(credentialId);
-
-            _logger.LogInformation("WebAuthn registration successful for user: {UserId}, CredentialId length: {CredentialIdLength}, PublicKey length: {PublicKeyLength}. Returning public key to client for local storage.", 
+            // Store credential on server (proper WebAuthn implementation)
+            await _credentialStore.StoreCredentialAsync(credential, cancellationToken);
+            
+            _logger.LogInformation("WebAuthn registration successful for user: {UserId}, CredentialId length: {CredentialIdLength}, PublicKey length: {PublicKeyLength}. Credential stored on server.", 
                 userId, credential.CredentialId.Length, credential.PublicKey.Length);
 
             return Ok(new 
             { 
-                Message = "Credential registered successfully",
-                PublicKey = publicKeyBase64,
-                CredentialId = credentialIdBase64
+                Message = "Credential registered successfully"
             });
         }
         catch (Exception ex)
@@ -500,7 +492,7 @@ public class WebAuthnVerifyRequest
 {
     public string ChallengeKey { get; set; } = string.Empty;
     public WebAuthnResponse? Response { get; set; }
-    public string PublicKey { get; set; } = string.Empty; // Base64 encoded public key from client
+    // PublicKey removed - server now looks up credential by credential ID from the WebAuthn response
 }
 
 public class WebAuthnRegisterRequest

@@ -1,4 +1,4 @@
-# API to Keycloak Certificate Trust
+# Certificate Trust Architecture
 
 ## Quick Answer
 

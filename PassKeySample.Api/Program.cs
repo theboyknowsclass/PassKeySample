@@ -5,7 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
 using PassKeySample.Api.Configuration;
 using PassKeySample.Api.Extensions;
-using PassKeySample.Api.Services;
+using PassKeySample.Api.Services.Authentication;
+using PassKeySample.Api.Services.Identity;
+using PassKeySample.Api.Services.WebAuthn;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -133,7 +135,7 @@ builder.Services.AddScoped<OidcDiscoveryService>();
 
 // Register WebAuthn services
 // Credential Store: Use InMemoryWebAuthnCredentialStore for development/testing.
-// For production, implement PersistentWebAuthnCredentialStore (e.g., Entity Framework, Dapper, etc.)
+// For production, implement IWebAuthnCredentialStore with a persistent backend (e.g., Entity Framework, Dapper, etc.)
 // and swap the registration below. The interface IWebAuthnCredentialStore abstracts the storage implementation.
 // Example for persistent store: builder.Services.AddScoped<IWebAuthnCredentialStore, DatabaseWebAuthnCredentialStore>();
 builder.Services.AddScoped<IWebAuthnCredentialStore, InMemoryWebAuthnCredentialStore>();
@@ -196,11 +198,16 @@ app.UseHttpsRedirection();
 // Enable CORS (before other middleware)
 app.UseCors("AllowFrontend");
 
-// Add DPoP validation middleware (before authorization)
-app.UseMiddleware<PassKeySample.Api.Middleware.DPoPValidationMiddleware>();
+// Routing must be configured before middleware so endpoint metadata is available
+app.UseRouting();
+
+// Authentication middleware - validates JWT + DPoP
+app.UseMiddleware<PassKeySample.Api.Middleware.AuthenticationMiddleware>();
+
+// Authorization middleware - checks roles
+app.UseMiddleware<PassKeySample.Api.Middleware.AuthorizationMiddleware>();
 
 app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
-
